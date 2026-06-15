@@ -1,4 +1,4 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Response
 from fastapi.middleware.cors import CORSMiddleware
 from timezonefinder import TimezoneFinder
 from datetime import datetime
@@ -7,6 +7,7 @@ import swisseph as swe
 import os
 import urllib.request
 import ssl
+import json  # Přidáno pro správné kódování JSONu
 
 # --- ROBUSTNÍ AUTOMATICKÉ STAŽENÍ ASTROLOGICKÝCH DAT ---
 FILES_TO_DOWNLOAD = ["seas_18.se1", "sepl_18.se1", "semo_18.se1", "seas_19.se1", "sepl_19.se1", "semo_19.se1"]
@@ -69,12 +70,11 @@ def get_angle_diff(lon1, lon2):
     return diff
 
 def find_house_idx(lon, cusps):
-    # OPRAVENO: Bezpečné ošetření délky pole domů (zajistí přesně 12 prvků)
     c = list(cusps[1:]) if len(cusps) == 13 else list(cusps)
     
     for i in range(12):
         c1 = c[i]
-        c2 = c[(i + 1) % 12] # Pro 12. dům skočí bezpečně zpět na index 0
+        c2 = c[(i + 1) % 12]
         if c2 < c1:
             if lon >= c1 or lon < c2: 
                 return i + 1
@@ -115,7 +115,6 @@ def compute_data_at_jd(jd_ut, lat, lon):
     for name, code, e_type in bodies:
         try:
             res = swe.calc_ut(jd_ut, code)
-            # OPRAVENO: Správné čtení z vnořené n-tice swisseph
             elements[name] = (res[0][0], res[0][3], e_type)
         except swe.Error as e:
             print(f"Poznámka: Prvek {name} byl přeskočen: {e}")
@@ -140,7 +139,8 @@ def compute_data_at_jd(jd_ut, lat, lon):
 
 @app.get("/")
 def read_root():
-    return {"status": "Astro API bezi naprosto v poradku! Pro vypocet pouzij /calculate"}
+    response_data = {"status": "Astro API bezi naprosto v poradku! Pro vypocet pouzij /calculate"}
+    return Response(content=json.dumps(response_data, ensure_ascii=False), media_type="application/json; charset=utf-8")
 
 @app.get("/calculate")
 def calculate_chart(date: str, time: str, lat: float, lon: float):
@@ -233,9 +233,16 @@ def calculate_chart(date: str, time: str, lat: float, lon: float):
                     else:
                         other_aspects.append(aspect_data)
                         
-    return {
+    # Vytvoření čistého výsledného slovníku
+    vysledek = {
         "postaveni": postaveni,
         "domy": domy,
         "aspekty_planet": planet_aspects,
         "ostatni_aspekty": other_aspects
     }
+    
+    # VYNUCENÍ SPRÁVNÉHO KÓDOVÁNÍ ČEŠTINY PRO PROHLÍŽEČE
+    return Response(
+        content=json.dumps(vysledek, ensure_ascii=False), 
+        media_type="application/json; charset=utf-8"
+    )
