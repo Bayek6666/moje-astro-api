@@ -69,13 +69,18 @@ def get_angle_diff(lon1, lon2):
     return diff
 
 def find_house_idx(lon, cusps):
-    for i in range(1, 12):
-        c1 = cusps[i]
-        c2 = cusps[i+1]
+    # OPRAVENO: Bezpečné ošetření délky pole domů (zajistí přesně 12 prvků)
+    c = list(cusps[1:]) if len(cusps) == 13 else list(cusps)
+    
+    for i in range(12):
+        c1 = c[i]
+        c2 = c[(i + 1) % 12] # Pro 12. dům skočí bezpečně zpět na index 0
         if c2 < c1:
-            if lon >= c1 or lon < c2: return i
+            if lon >= c1 or lon < c2: 
+                return i + 1
         else:
-            if c1 <= lon < c2: return i
+            if c1 <= lon < c2: 
+                return i + 1
     return 12
 
 def compute_data_at_jd(jd_ut, lat, lon):
@@ -110,7 +115,7 @@ def compute_data_at_jd(jd_ut, lat, lon):
     for name, code, e_type in bodies:
         try:
             res = swe.calc_ut(jd_ut, code)
-            # OPRAVENO: res[0] je n-tice pozic, z ní bereme index 0 (longituda) a index 3 (rychlost)
+            # OPRAVENO: Správné čtení z vnořené n-tice swisseph
             elements[name] = (res[0][0], res[0][3], e_type)
         except swe.Error as e:
             print(f"Poznámka: Prvek {name} byl přeskočen: {e}")
@@ -170,9 +175,10 @@ def calculate_chart(date: str, time: str, lat: float, lon: float):
         postaveni[name] = item
         
     domy = {}
-    for i in range(1, 13):
-        znameni, stupne = get_sign_and_deg_str(cusps[i])
-        domy[f"{i}. dům"] = {"znameni": znameni, "stupne": stupne}
+    c_list = list(cusps[1:]) if len(cusps) == 13 else list(cusps)
+    for i in range(12):
+        znameni, stupne = get_sign_and_deg_str(c_list[i])
+        domy[f"{i+1}. dům"] = {"znameni": znameni, "stupne": stupne}
         
     ASPECT_TYPES = [
         {"jmeno": "Konjunkce", "uhel": 0, "orb": 8.0},
