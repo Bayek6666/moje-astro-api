@@ -1,4 +1,3 @@
-
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from flatlib.datetime import Datetime
@@ -11,7 +10,6 @@ import pytz
 
 app = FastAPI()
 
-# Povolení CORS, aby na toto API mohl sahat tvůj frontend z Lovable
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -24,35 +22,34 @@ tf = TimezoneFinder()
 
 @app.get("/calculate")
 def calculate_chart(date: str, time: str, lat: float, lon: float):
-    # Očekává formát date="1995-12-15" a time="09:06"
-    
-    # 1. Automatické zjištění časového pásma a historického posunu (DST)
+    # Očekává date="1995-12-15" a time="09:06"
     tz_name = tf.timezone_at(lng=lon, lat=lat)
+    if not tz_name:
+        tz_name = "UTC"
+        
     local_tz = pytz.timezone(tz_name)
-    
     naive_dt = datetime.strptime(f"{date} {time}", "%Y-%m-%d %H:%M")
     local_dt = local_tz.localize(naive_dt)
     
-    # Výpočet posunu vůči UTC v hodinách
-    offset_hours = local_dt.utcoffset().total_seconds() / 3600
-    offset_sign = "+" if offset_hours >= 0 else "-"
-    offset_str = f"{offset_sign}{abs(int(offset_hours)):02d}:00"
+    # Výpočet přesného časového posunu včetně minut (např. kvůli Indii)
+    offset_seconds = local_dt.utcoffset().total_seconds()
+    offset_hours = abs(int(offset_seconds // 3600))
+    offset_minutes = abs(int((offset_seconds % 3600) // 60))
+    offset_sign = "+" if offset_seconds >= 0 else "-"
+    offset_str = f"{offset_sign}{offset_hours:02d}:{offset_minutes:02d}"
     
-    # 2. Příprava dat pro astrologickou knihovnu Flatlib
-    flatlib_date = date.replace("-", "/") # formát YYYY/MM/DD
+    flatlib_date = date.replace("-", "/")
     dob = Datetime(flatlib_date, time, offset_str)
     pos = GeoPos(lat, lon)
     
-    # 3. Výpočet horoskopu (Placidus)
     chart = Chart(dob, pos, hsys=const.HOUSES_PLACIDUS)
     
-    # 4. Sestavení čistého JSON výstupu
     result = {"planets": {}, "houses": {}}
     
     for obj in chart.objects:
         result["planets"][obj.id] = {
             "sign": obj.sign,
-            "degree": round(obj.signlon, 2), # Stupně ve znamení
+            "degree": round(obj.signlon, 2),
             "house": chart.getHouse(obj).id if chart.getHouse(obj) else None
         }
         
