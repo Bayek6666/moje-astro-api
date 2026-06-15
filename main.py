@@ -9,7 +9,6 @@ import urllib.request
 import ssl
 
 # --- ROBUSTNÍ AUTOMATICKÉ STAŽENÍ ASTROLOGICKÝCH DAT ---
-# Stahujeme soubory přímo do kořenového adresáře s podvrženým User-Agentem, aby nás server neblokoval
 FILES_TO_DOWNLOAD = ["seas_18.se1", "sepl_18.se1", "semo_18.se1", "seas_19.se1", "sepl_19.se1", "semo_19.se1"]
 
 ssl_context = ssl.create_default_context()
@@ -20,7 +19,6 @@ for filename in FILES_TO_DOWNLOAD:
     if not os.path.exists(filename):
         url = f"https://www.astro.com/ftp/swisseph/ephe/{filename}"
         try:
-            # Přidání User-Agent hlavičky, bez které astro.com vrací chybu 404/403
             req = urllib.request.Request(
                 url, 
                 headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'}
@@ -81,7 +79,6 @@ def find_house_idx(lon, cusps):
     return 12
 
 def compute_data_at_jd(jd_ut, lat, lon):
-    # Výpočet domů s ochranou pro extrémní zeměpisné polohy
     try:
         cusps, ascmc = swe.houses(jd_ut, lat, lon, b'P')
         asc = ascmc[0]
@@ -93,7 +90,6 @@ def compute_data_at_jd(jd_ut, lat, lon):
         mc = ascmc[1]
         vertex = ascmc[3]
     
-    # Definice těles k výpočtu
     bodies = [
         ("Slunce", swe.SUN, "planeta"),
         ("Měsíc", swe.MOON, "planeta"),
@@ -113,12 +109,11 @@ def compute_data_at_jd(jd_ut, lat, lon):
     elements = {}
     for name, code, e_type in bodies:
         try:
-            # Pokud chybí externí soubor, základní planety automaticky použijí vestavěný Moshier model.
-            # Pokud selže Chirón, odchytíme chybu a aplikace poběží bezpečně dál.
             res = swe.calc_ut(jd_ut, code)
-            elements[name] = (res[0], res[3], e_type)
+            # OPRAVENO: res[0] je n-tice pozic, z ní bereme index 0 (longituda) a index 3 (rychlost)
+            elements[name] = (res[0][0], res[0][3], e_type)
         except swe.Error as e:
-            print(f"Poznámka: Prvek {name} byl přeskočen (chybí datový soubor): {e}")
+            print(f"Poznámka: Prvek {name} byl přeskočen: {e}")
             continue
             
     if "Slunce" in elements and "Měsíc" in elements:
