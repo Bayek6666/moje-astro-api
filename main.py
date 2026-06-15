@@ -8,11 +8,10 @@ import os
 import urllib.request
 import ssl
 
-# --- AUTOMATICKÉ STAŽENÍ ASTROLOGICKÝCH DAT PŘÍMO DO KOŘENE ---
-# Knihovna hledá soubory ve výchozím nastavení v aktuálním adresáři (.), tak jí je dáme přímo tam.
-FILES_TO_DOWNLOAD = ["seas_18.se1", "sepl_18.se1", "semo_18.se1"]
+# --- ROBUSTNÍ AUTOMATICKÉ STAŽENÍ ASTROLOGICKÝCH DAT ---
+# Stahujeme soubory přímo do kořenového adresáře s podvrženým User-Agentem, aby nás server neblokoval
+FILES_TO_DOWNLOAD = ["seas_18.se1", "sepl_18.se1", "semo_18.se1", "seas_19.se1", "sepl_19.se1", "semo_19.se1"]
 
-# Vytvoření kontextu pro ignorování SSL (pro případ, že Render nemá aktualizované certifikáty)
 ssl_context = ssl.create_default_context()
 ssl_context.check_hostname = False
 ssl_context.verify_mode = ssl.CERT_NONE
@@ -21,11 +20,16 @@ for filename in FILES_TO_DOWNLOAD:
     if not os.path.exists(filename):
         url = f"https://www.astro.com/ftp/swisseph/ephe/{filename}"
         try:
-            with urllib.request.urlopen(url, context=ssl_context) as response, open(filename, 'wb') as out_file:
+            # Přidání User-Agent hlavičky, bez které astro.com vrací chybu 404/403
+            req = urllib.request.Request(
+                url, 
+                headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'}
+            )
+            with urllib.request.urlopen(req, context=ssl_context) as response, open(filename, 'wb') as out_file:
                 out_file.write(response.read())
             print(f"Úspěšně stažen astrologický soubor: {filename}")
         except Exception as e:
-            print(f"Nepodařilo se stáhnout {filename}: {e}")
+            print(f"Varování: Nepodařilo se stáhnout soubor {filename}: {e}")
 # --------------------------------------------------------------
 
 app = FastAPI()
@@ -40,13 +44,11 @@ app.add_middleware(
 
 tf = TimezoneFinder()
 
-# České názvy znamení zvěrokruhu
 ZODIAC_SIGNS_CZ = [
     "Beran", "Býk", "Blíženci", "Rak", "Lev", "Panna",
     "Váhy", "Štír", "Střelec", "Kozoroh", "Vodnář", "Ryby"
 ]
 
-# Seznam hlavních planet pro filtraci planetárních aspektů
 PLANETS_LIST = ["Slunce", "Měsíc", "Merkur", "Venuše", "Mars", "Jupiter", "Saturn", "Uran", "Neptun", "Pluto"]
 
 def get_sign_and_deg_str(lon):
@@ -72,61 +74,68 @@ def find_house_idx(lon, cusps):
     for i in range(1, 12):
         c1 = cusps[i]
         c2 = cusps[i+1]
-        if c2 < c1:  # Přechod přes 0° Berana (360°)
+        if c2 < c1:
             if lon >= c1 or lon < c2: return i
         else:
             if c1 <= lon < c2: return i
     return 12
 
 def compute_data_at_jd(jd_ut, lat, lon):
-    # Výpočet domů (Placidus = b'P')
-    cusps, ascmc = swe.houses(jd_ut, lat, lon, b'P')
-    asc = ascmc[0]
-    mc = ascmc[1]
-    vertex = ascmc[3]
+    # Výpočet domů s ochranou pro extrémní zeměpisné polohy
+    try:
+        cusps, ascmc = swe.houses(jd_ut, lat, lon, b'P')
+        asc = ascmc[0]
+        mc = ascmc[1]
+        vertex = ascmc[3]
+    except swe.Error:
+        cusps, ascmc = swe.houses(jd_ut, lat, lon, b'E')
+        asc = ascmc[0]
+        mc = ascmc[1]
+        vertex = ascmc[3]
     
-    # Výpočet pozic těles
-    sun = swe.calc_ut(jd_ut, swe.SUN)[0]
-    moon = swe.calc_ut(jd_ut, swe.MOON)[0]
-    mercury = swe.calc_ut(jd_ut, swe.MERCURY)[0]
-    venus = swe.calc_ut(jd_ut, swe.VENUS)[0]
-    mars = swe.calc_ut(jd_ut, swe.MARS)[0]
-    jupiter = swe.calc_ut(jd_ut, swe.JUPITER)[0]
-    saturn = swe.calc_ut(jd_ut, swe.SATURN)[0]
-    uranus = swe.calc_ut(jd_ut, swe.URANUS)[0]
-    neptune = swe.calc_ut(jd_ut, swe.NEPTUNE)[0]
-    pluto = swe.calc_ut(jd_ut, swe.PLUTO)[0]
-    node = swe.calc_ut(jd_ut, swe.TRUE_NODE)[0]  # Pravý vzestupný uzel
-    lilith = swe.calc_ut(jd_ut, swe.MEAN_APOG)[0]  # Černá Luna
-    chiron = swe.calc_ut(jd_ut, swe.CHIRON)[0]
+    # Definice těles k výpočtu
+    bodies = [
+        ("Slunce", swe.SUN, "planeta"),
+        ("Měsíc", swe.MOON, "planeta"),
+        ("Merkur", swe.MERCURY, "planeta"),
+        ("Venuše", swe.VENUS, "planeta"),
+        ("Mars", swe.MARS, "planeta"),
+        ("Jupiter", swe.JUPITER, "planeta"),
+        ("Saturn", swe.SATURN, "planeta"),
+        ("Uran", swe.URANUS, "planeta"),
+        ("Neptun", swe.NEPTUNE, "planeta"),
+        ("Pluto", swe.PLUTO, "planeta"),
+        ("Severní Uzel", swe.TRUE_NODE, "bod"),
+        ("Lilith", swe.MEAN_APOG, "bod"),
+        ("Chirón", swe.CHIRON, "bod")
+    ]
     
-    # Výpočet Bodu Štěstí (Pars Fortunae) podle denního/nočního zrození
-    sun_house = find_house_idx(sun[0], cusps)
-    is_day = sun_house >= 7
-    if is_day:
-        fortune_lon = (asc + moon[0] - sun[0]) % 360
-    else:
-        fortune_lon = (asc + sun[0] - moon[0]) % 360
+    elements = {}
+    for name, code, e_type in bodies:
+        try:
+            # Pokud chybí externí soubor, základní planety automaticky použijí vestavěný Moshier model.
+            # Pokud selže Chirón, odchytíme chybu a aplikace poběží bezpečně dál.
+            res = swe.calc_ut(jd_ut, code)
+            elements[name] = (res[0], res[3], e_type)
+        except swe.Error as e:
+            print(f"Poznámka: Prvek {name} byl přeskočen (chybí datový soubor): {e}")
+            continue
+            
+    if "Slunce" in elements and "Měsíc" in elements:
+        sun_lon = elements["Slunce"][0]
+        moon_lon = elements["Měsíc"][0]
+        sun_house = find_house_idx(sun_lon, cusps)
+        is_day = sun_house >= 7
+        if is_day:
+            fortune_lon = (asc + moon_lon - sun_lon) % 360
+        else:
+            fortune_lon = (asc + sun_lon - moon_lon) % 360
+        elements["Bod Štěstí"] = (fortune_lon, 0, "bod")
         
-    elements = {
-        "Slunce": (sun[0], sun[3], "planeta"),
-        "Měsíc": (moon[0], moon[3], "planeta"),
-        "Merkur": (mercury[0], mercury[3], "planeta"),
-        "Venuše": (venus[0], venus[3], "planeta"),
-        "Mars": (mars[0], mars[3], "planeta"),
-        "Jupiter": (jupiter[0], jupiter[3], "planeta"),
-        "Saturn": (saturn[0], saturn[3], "planeta"),
-        "Uran": (uranus[0], uranus[3], "planeta"),
-        "Neptun": (neptune[0], neptune[3], "planeta"),
-        "Pluto": (pluto[0], pluto[3], "planeta"),
-        "Severní Uzel": (node[0], node[3], "bod"),
-        "Lilith": (lilith[0], lilith[3], "bod"),
-        "Chirón": (chiron[0], chiron[3], "bod"),
-        "Bod Štěstí": (fortune_lon, 0, "bod"),
-        "Vertex": (vertex, 0, "bod"),
-        "Ascendent": (asc, 0, "osa"),
-        "MC": (mc, 0, "osa")
-    }
+    elements["Vertex"] = (vertex, 0, "bod")
+    elements["Ascendent"] = (asc, 0, "osa")
+    elements["MC"] = (mc, 0, "osa")
+    
     return elements, cusps
 
 @app.get("/")
@@ -147,12 +156,12 @@ def calculate_chart(date: str, time: str, lat: float, lon: float):
     hour_decimal = utc_dt.hour + utc_dt.minute / 60.0 + utc_dt.second / 3600.0
     jd_ut = swe.julday(utc_dt.year, utc_dt.month, utc_dt.day, hour_decimal)
     
-    # Spočítat aktuální data a data o kousek v budoucnosti pro detekci Aplikující/Separující
     elements, cusps = compute_data_at_jd(jd_ut, lat, lon)
     elements_future, _ = compute_data_at_jd(jd_ut + 0.005, lat, lon)
     
     postaveni = {}
-    for name, (e_lon, e_speed, e_type) in elements.items():
+    for name, data in elements.items():
+        e_lon, e_speed, e_type = data
         znameni, stupne = get_sign_and_deg_str(e_lon)
         item = {"znameni": znameni, "stupne": stupne}
         
@@ -170,7 +179,6 @@ def calculate_chart(date: str, time: str, lat: float, lon: float):
         znameni, stupne = get_sign_and_deg_str(cusps[i])
         domy[f"{i}. dům"] = {"znameni": znameni, "stupne": stupne}
         
-    # Aspekty (Konjunkce, Opozice, Trigon, Kvadratura, Sextil) s orbem max 8°
     ASPECT_TYPES = [
         {"jmeno": "Konjunkce", "uhel": 0, "orb": 8.0},
         {"jmeno": "Opozice", "uhel": 180, "orb": 8.0},
@@ -196,13 +204,14 @@ def calculate_chart(date: str, time: str, lat: float, lon: float):
             for asp in ASPECT_TYPES:
                 current_orb = abs(diff - asp["uhel"])
                 if current_orb <= asp["orb"]:
-                    # Zjistit pohyb orbu pro určení fáze
-                    lon1_f, _, _ = elements_future[p1]
-                    lon2_f, _, _ = elements_future[p2]
-                    diff_f = get_angle_diff(lon1_f, lon2_f)
-                    future_orb = abs(diff_f - asp["uhel"])
-                    
-                    stav = "Aplikující" if future_orb < current_orb else "Separující"
+                    if p1 in elements_future and p2 in elements_future:
+                        lon1_f, _, _ = elements_future[p1]
+                        lon2_f, _, _ = elements_future[p2]
+                        diff_f = get_angle_diff(lon1_f, lon2_f)
+                        future_orb = abs(diff_f - asp["uhel"])
+                        stav = "Aplikující" if future_orb < current_orb else "Separující"
+                    else:
+                        stav = "Neznamy"
                     
                     orb_deg = int(current_orb)
                     orb_min = int(round((current_orb - orb_deg) * 60))
