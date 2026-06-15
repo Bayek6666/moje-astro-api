@@ -2,7 +2,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from flatlib.datetime import Datetime
-from flatlib.geopos import Geopos
+from flatlib.geopos import GeoPos
 from flatlib.chart import Chart
 from flatlib import const
 from timezonefinder import TimezoneFinder
@@ -41,7 +41,7 @@ def calculate_chart(date: str, time: str, lat: float, lon: float):
     # 2. Příprava dat pro astrologickou knihovnu Flatlib
     flatlib_date = date.replace("-", "/") # formát YYYY/MM/DD
     dob = Datetime(flatlib_date, time, offset_str)
-    pos = Geopos(lat, lon)
+    pos = GeoPos(lat, lon)
     
     # 3. Výpočet horoskopu (Placidus)
     chart = Chart(dob, pos, hsys=const.HOUSES_PLACIDUS)
