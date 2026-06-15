@@ -74,7 +74,7 @@ def compute_data_at_jd(jd_ut, lat, lon):
     neptune = swe.calc_ut(jd_ut, swe.NEPTUNE)[0]
     pluto = swe.calc_ut(jd_ut, swe.PLUTO)[0]
     node = swe.calc_ut(jd_ut, swe.TRUE_NODE)[0]  # Pravý vzestupný uzel
-    lilith = swe.calc_ut(jd_ut, swe.MEAN_APOGEE)[0]  # Černá Luna (Lilith)
+    lilith = swe.calc_ut(jd_ut, swe.MEAN_APOG)[0]  # OPRAVENO: MEAN_APOG místo MEAN_APOGEE
     chiron = swe.calc_ut(jd_ut, swe.CHIRON)[0]
     
     # Výpočet Bodu Štěstí (Pars Fortunae) podle denního/nočního zrození
