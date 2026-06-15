@@ -6,24 +6,27 @@ import pytz
 import swisseph as swe
 import os
 import urllib.request
+import ssl
 
-# --- AUTOMATICKÉ STAŽENÍ ASTROLOGICKÝCH DAT (EFEMERID) ---
-# Vytvoříme složku pro data, pokud neexistuje, a řekneme knihovně, kde ji najde
-EPHE_DIR = os.path.join(os.path.dirname(__file__), "ephe")
-os.makedirs(EPHE_DIR, exist_ok=True)
-swe.set_ephe_path(EPHE_DIR)
-
-# Stažení potřebných souborů pro Chiróna a vysokou přesnost planet (pro roky 1800-2100)
+# --- AUTOMATICKÉ STAŽENÍ ASTROLOGICKÝCH DAT PŘÍMO DO KOŘENE ---
+# Knihovna hledá soubory ve výchozím nastavení v aktuálním adresáři (.), tak jí je dáme přímo tam.
 FILES_TO_DOWNLOAD = ["seas_18.se1", "sepl_18.se1", "semo_18.se1"]
+
+# Vytvoření kontextu pro ignorování SSL (pro případ, že Render nemá aktualizované certifikáty)
+ssl_context = ssl.create_default_context()
+ssl_context.check_hostname = False
+ssl_context.verify_mode = ssl.CERT_NONE
+
 for filename in FILES_TO_DOWNLOAD:
-    file_path = os.path.join(EPHE_DIR, filename)
-    if not os.path.exists(file_path):
+    if not os.path.exists(filename):
         url = f"https://www.astro.com/ftp/swisseph/ephe/{filename}"
         try:
-            urllib.request.urlretrieve(url, file_path)
+            with urllib.request.urlopen(url, context=ssl_context) as response, open(filename, 'wb') as out_file:
+                out_file.write(response.read())
+            print(f"Úspěšně stažen astrologický soubor: {filename}")
         except Exception as e:
-            print(f"Nepodařilo se stáhnout astrologická data {filename}: {e}")
-# --------------------------------------------------------
+            print(f"Nepodařilo se stáhnout {filename}: {e}")
+# --------------------------------------------------------------
 
 app = FastAPI()
 
