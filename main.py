@@ -20,6 +20,10 @@ app.add_middleware(
 
 tf = TimezoneFinder()
 
+@app.get("/")
+def read_root():
+    return {"status": "Astro API bezi naprosto v poradku! Pro vypocet pouzij /calculate"}
+
 @app.get("/calculate")
 def calculate_chart(date: str, time: str, lat: float, lon: float):
     # Očekává date="1995-12-15" a time="09:06"
@@ -31,7 +35,7 @@ def calculate_chart(date: str, time: str, lat: float, lon: float):
     naive_dt = datetime.strptime(f"{date} {time}", "%Y-%m-%d %H:%M")
     local_dt = local_tz.localize(naive_dt)
     
-    # Výpočet přesného časového posunu včetně minut (např. kvůli Indii)
+    # Výpočet přesného časového posunu včetně minut
     offset_seconds = local_dt.utcoffset().total_seconds()
     offset_hours = abs(int(offset_seconds // 3600))
     offset_minutes = abs(int((offset_seconds % 3600) // 60))
@@ -47,10 +51,17 @@ def calculate_chart(date: str, time: str, lat: float, lon: float):
     result = {"planets": {}, "houses": {}}
     
     for obj in chart.objects:
+        try:
+            # Opravené zjišťování domu pro danou planetu
+            h = chart.houses.getObjectHouse(obj)
+            house_id = h.id if h else None
+        except Exception:
+            house_id = None
+            
         result["planets"][obj.id] = {
             "sign": obj.sign,
             "degree": round(obj.signlon, 2),
-            "house": chart.getHouse(obj).id if chart.getHouse(obj) else None
+            "house": house_id
         }
         
     for house in chart.houses:
