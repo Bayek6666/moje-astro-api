@@ -4,6 +4,26 @@ from timezonefinder import TimezoneFinder
 from datetime import datetime
 import pytz
 import swisseph as swe
+import os
+import urllib.request
+
+# --- AUTOMATICKÉ STAŽENÍ ASTROLOGICKÝCH DAT (EFEMERID) ---
+# Vytvoříme složku pro data, pokud neexistuje, a řekneme knihovně, kde ji najde
+EPHE_DIR = os.path.join(os.path.dirname(__file__), "ephe")
+os.makedirs(EPHE_DIR, exist_ok=True)
+swe.set_ephe_path(EPHE_DIR)
+
+# Stažení potřebných souborů pro Chiróna a vysokou přesnost planet (pro roky 1800-2100)
+FILES_TO_DOWNLOAD = ["seas_18.se1", "sepl_18.se1", "semo_18.se1"]
+for filename in FILES_TO_DOWNLOAD:
+    file_path = os.path.join(EPHE_DIR, filename)
+    if not os.path.exists(file_path):
+        url = f"https://www.astro.com/ftp/swisseph/ephe/{filename}"
+        try:
+            urllib.request.urlretrieve(url, file_path)
+        except Exception as e:
+            print(f"Nepodařilo se stáhnout astrologická data {filename}: {e}")
+# --------------------------------------------------------
 
 app = FastAPI()
 
@@ -74,7 +94,7 @@ def compute_data_at_jd(jd_ut, lat, lon):
     neptune = swe.calc_ut(jd_ut, swe.NEPTUNE)[0]
     pluto = swe.calc_ut(jd_ut, swe.PLUTO)[0]
     node = swe.calc_ut(jd_ut, swe.TRUE_NODE)[0]  # Pravý vzestupný uzel
-    lilith = swe.calc_ut(jd_ut, swe.MEAN_APOG)[0]  # OPRAVENO: MEAN_APOG místo MEAN_APOGEE
+    lilith = swe.calc_ut(jd_ut, swe.MEAN_APOG)[0]  # Černá Luna
     chiron = swe.calc_ut(jd_ut, swe.CHIRON)[0]
     
     # Výpočet Bodu Štěstí (Pars Fortunae) podle denního/nočního zrození
