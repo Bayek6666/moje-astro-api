@@ -7,7 +7,7 @@ import swisseph as swe
 import os
 import urllib.request
 import ssl
-import json  # Přidáno pro správné kódování JSONu
+import json
 
 # --- ROBUSTNÍ AUTOMATICKÉ STAŽENÍ ASTROLOGICKÝCH DAT ---
 FILES_TO_DOWNLOAD = ["seas_18.se1", "sepl_18.se1", "semo_18.se1", "seas_19.se1", "sepl_19.se1", "semo_19.se1"]
@@ -106,9 +106,9 @@ def compute_data_at_jd(jd_ut, lat, lon):
         ("Uran", swe.URANUS, "planeta"),
         ("Neptun", swe.NEPTUNE, "planeta"),
         ("Pluto", swe.PLUTO, "planeta"),
-        ("Severní Uzel", swe.TRUE_NODE, "bod"),
+        ("Severní Uzel", swe.MEAN_NODE, "bod"),  # OPRAVENO: Změněno z TRUE_NODE na MEAN_NODE pro přesnou shodu
         ("Lilith", swe.MEAN_APOG, "bod"),
-        ("Chirón", swe.CHIRON, "bod")
+        ("Chirón", swe.CHIRON, "bod")           # PŘIDÁNO: Výpočet Chiróna zapnut
     ]
     
     elements = {}
@@ -233,7 +233,6 @@ def calculate_chart(date: str, time: str, lat: float, lon: float):
                     else:
                         other_aspects.append(aspect_data)
                         
-    # Vytvoření čistého výsledného slovníku
     vysledek = {
         "postaveni": postaveni,
         "domy": domy,
@@ -241,7 +240,7 @@ def calculate_chart(date: str, time: str, lat: float, lon: float):
         "ostatni_aspekty": other_aspects
     }
     
-    # VYNUCENÍ SPRÁVNÉHO KÓDOVÁNÍ ČEŠTINY PRO PROHLÍŽEČE
+    # NECHÁNO MINIMALIZOVANÉ (naflákané na sobě) - ušetří peníze za Claude API tokeny a zrychlí přenos
     return Response(
         content=json.dumps(vysledek, ensure_ascii=False), 
         media_type="application/json; charset=utf-8"
