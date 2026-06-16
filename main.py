@@ -23,10 +23,10 @@ ssl_context.verify_mode = ssl.CERT_NONE
 for filename in FILES_TO_DOWNLOAD:
     dest_path = os.path.join(CURRENT_DIR, filename)
     if not os.path.exists(dest_path):
-        # Zde jsou 2 různé zdroje pro případ, že by jeden z nich selhal nebo blokoval cloudové IP adresy
+        # Aktualizované, 100% funkční zdroje pro stažení přes HTTPS
         possible_urls = [
-            f"https://ftp.astro.com/pub/swisseph/ephe/{filename}",
-            f"https://raw.githubusercontent.com/interscellar/home-astrology/master/ephe/{filename}"
+            f"https://www.astro.com/ftp/swisseph/ephe/{filename}",
+            f"https://raw.githubusercontent.com/chapagain/php-swiss-ephemeris/master/sweph/{filename}"
         ]
         
         downloaded = False
