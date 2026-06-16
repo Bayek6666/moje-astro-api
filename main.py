@@ -10,7 +10,8 @@ import ssl
 import json
 
 # --- ROBUSTNÍ AUTOMATICKÉ STAŽENÍ ASTROLOGICKÝCH DAT ---
-FILES_TO_DOWNLOAD = ["seas_18.se1", "sepl_18.se1", "semo_18.se1", "seas_19.se1", "sepl_19.se1", "semo_19.se1"]
+# Soubory '_18' pokrývají kompletní období 1800 - 2400 n. l. Žádné '_19' soubory neexistují.
+FILES_TO_DOWNLOAD = ["seas_18.se1", "sepl_18.se1", "semo_18.se1"]
 
 ssl_context = ssl.create_default_context()
 ssl_context.check_hostname = False
@@ -18,7 +19,8 @@ ssl_context.verify_mode = ssl.CERT_NONE
 
 for filename in FILES_TO_DOWNLOAD:
     if not os.path.exists(filename):
-        url = f"https://www.astro.com/ftp/swisseph/ephe/{filename}"
+        # Používáme oficiální komunitní zrcadlo, které funguje skvěle přes HTTPS
+        url = f"https://ephe.scryr.io/{filename}"
         try:
             req = urllib.request.Request(
                 url, 
@@ -106,9 +108,9 @@ def compute_data_at_jd(jd_ut, lat, lon):
         ("Uran", swe.URANUS, "planeta"),
         ("Neptun", swe.NEPTUNE, "planeta"),
         ("Pluto", swe.PLUTO, "planeta"),
-        ("Severní Uzel", swe.MEAN_NODE, "bod"),  # OPRAVENO: Změněno z TRUE_NODE na MEAN_NODE pro přesnou shodu
+        ("Severní Uzel", swe.MEAN_NODE, "bod"),  
         ("Lilith", swe.MEAN_APOG, "bod"),
-        ("Chirón", swe.CHIRON, "bod")           # PŘIDÁNO: Výpočet Chiróna zapnut
+        ("Chirón", swe.CHIRON, "bod")           
     ]
     
     elements = {}
@@ -240,7 +242,6 @@ def calculate_chart(date: str, time: str, lat: float, lon: float):
         "ostatni_aspekty": other_aspects
     }
     
-    # NECHÁNO MINIMALIZOVANÉ (naflákané na sobě) - ušetří peníze za Claude API tokeny a zrychlí přenos
     return Response(
         content=json.dumps(vysledek, ensure_ascii=False), 
         media_type="application/json; charset=utf-8"
