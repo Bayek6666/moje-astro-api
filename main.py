@@ -9,8 +9,11 @@ import urllib.request
 import ssl
 import json
 
+# Nastavení pracovní složky jako výchozí pro astrologická data
+CURRENT_DIR = os.getcwd()
+swe.set_ephe_path(CURRENT_DIR)
+
 # --- ROBUSTNÍ AUTOMATICKÉ STAŽENÍ ASTROLOGICKÝCH DAT ---
-# Soubory '_18' pokrývají kompletní období 1800 - 2400 n. l. Žádné '_19' soubory neexistují.
 FILES_TO_DOWNLOAD = ["seas_18.se1", "sepl_18.se1", "semo_18.se1"]
 
 ssl_context = ssl.create_default_context()
@@ -18,19 +21,33 @@ ssl_context.check_hostname = False
 ssl_context.verify_mode = ssl.CERT_NONE
 
 for filename in FILES_TO_DOWNLOAD:
-    if not os.path.exists(filename):
-        # Používáme oficiální komunitní zrcadlo, které funguje skvěle přes HTTPS
-        url = f"https://ephe.scryr.io/{filename}"
-        try:
-            req = urllib.request.Request(
-                url, 
-                headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'}
-            )
-            with urllib.request.urlopen(req, context=ssl_context) as response, open(filename, 'wb') as out_file:
-                out_file.write(response.read())
-            print(f"Úspěšně stažen astrologický soubor: {filename}")
-        except Exception as e:
-            print(f"Varování: Nepodařilo se stáhnout soubor {filename}: {e}")
+    dest_path = os.path.join(CURRENT_DIR, filename)
+    if not os.path.exists(dest_path):
+        # Zde jsou 2 různé zdroje pro případ, že by jeden z nich selhal nebo blokoval cloudové IP adresy
+        possible_urls = [
+            f"https://ftp.astro.com/pub/swisseph/ephe/{filename}",
+            f"https://raw.githubusercontent.com/interscellar/home-astrology/master/ephe/{filename}"
+        ]
+        
+        downloaded = False
+        for url in possible_urls:
+            try:
+                req = urllib.request.Request(
+                    url, 
+                    headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko)'}
+                )
+                with urllib.request.urlopen(req, context=ssl_context, timeout=15) as response, open(dest_path, 'wb') as out_file:
+                    out_file.write(response.read())
+                print(f"Úspěšně stažen astrologický soubor z {url}")
+                downloaded = True
+                break
+            except Exception as e:
+                print(f"Zdroj {url} selhal: {e}")
+                if os.path.exists(dest_path):
+                    os.remove(dest_path) # Vyčistit poškozený soubor při nedokončeném stahování
+        
+        if not downloaded:
+            print(f"Kritické varování: Nepodařilo se stáhnout soubor {filename} z žádného zdroje!")
 # --------------------------------------------------------------
 
 app = FastAPI()
