@@ -165,7 +165,11 @@ def compute_data_at_jd(jd_ut, lat, lon):
 @app.get("/")
 def read_root():
     response_data = {"status": "Astro API bezi naprosto v poradku! Pro vypocet pouzij /calculate"}
-    return Response(content=json.dumps(response_data, ensure_ascii=False), media_type="application/json; charset=utf-8")
+    return Response(
+        content=json.dumps(response_data, ensure_ascii=False), 
+        media_type="application/json; charset=utf-8",
+        headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"}
+    )
 
 @app.get("/calculate")
 def calculate_chart(date: str, time: str, lat: float, lon: float):
@@ -267,5 +271,10 @@ def calculate_chart(date: str, time: str, lat: float, lon: float):
     
     return Response(
         content=json.dumps(vysledek, ensure_ascii=False), 
-        media_type="application/json; charset=utf-8"
+        media_type="application/json; charset=utf-8",
+        headers={
+            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+            "Pragma": "no-cache",
+            "Expires": "0"
+        }
     )
