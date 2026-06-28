@@ -146,9 +146,15 @@ def compute_data_at_jd(jd_ut, lat, lon):
         is_day = sun_house >= 7
         if is_day:
             fortune_lon = (asc + moon_lon - sun_lon) % 360
+            spirit_lon = (asc + sun_lon - moon_lon) % 360
         else:
             fortune_lon = (asc + sun_lon - moon_lon) % 360
+            spirit_lon = (asc + moon_lon - sun_lon) % 360
         elements["Bod Štěstí"] = (fortune_lon, 0, "bod")
+        elements["Bod ducha"] = (spirit_lon, 0, "bod")
+        
+    if "Severní Uzel" in elements:
+        elements["Jižní uzel"] = ((elements["Severní Uzel"][0] + 180) % 360, elements["Severní Uzel"][1], "bod")
         
     elements["Vertex"] = (vertex, 0, "bod")
     elements["Ascendent"] = (asc, 0, "osa")
