@@ -285,6 +285,8 @@ def calculate_chart(date: str, time: str, lat: float, lon: float):
 #  (nový endpoint /forecast — stávající /calculate se nemění)
 # =====================================================================
 from datetime import timedelta
+from functools import lru_cache
+import numpy as np
 
 FORECAST_SLOW = [("Jupiter", swe.JUPITER, 2.0), ("Saturn", swe.SATURN, 2.0),
                  ("Uran", swe.URANUS, 1.5), ("Neptun", swe.NEPTUNE, 1.5), ("Pluto", swe.PLUTO, 1.5)]
@@ -329,6 +331,153 @@ def _signed_orb(transit_lon, natal_lon, angle):
     return best
 
 
+def _signed_orb_np(lons, natal_lon, angle):
+    """Totéž co _signed_orb, ale pro celé pole poloh najednou (numpy)."""
+    d = (lons - natal_lon) % 360
+    x1 = ((d - angle + 180) % 360) - 180
+    if angle in (0, 180):
+        return x1
+    x2 = ((d - (360 - angle) + 180) % 360) - 180
+    return np.where(np.abs(x2) < np.abs(x1), x2, x1)
+
+
+# ---------------------------------------------------------------------
+#  Sdílené výpočty: pro všechny uživatele v daný den jsou stejné, proto
+#  se počítají jen jednou a drží se v paměti (lru_cache). Na uživatele
+#  pak zbývá jen porovnání s jeho natálními body.
+# ---------------------------------------------------------------------
+SCAN_DAYS = 730
+STEP = 0.25
+
+
+@lru_cache(maxsize=8)
+def _slow_samples(day_key):
+    """Denní polohy pomalých planet v okně ±2 roky (poledne UT)."""
+    jds = np.arange(day_key + 0.5 - SCAN_DAYS, day_key + 0.5 + SCAN_DAYS + 0.5, 1.0)
+    out = {}
+    for _, code, _orb in FORECAST_SLOW:
+        out[code] = np.array([swe.calc_ut(float(j), code)[0][0] for j in jds])
+    return jds, out
+
+
+@lru_cache(maxsize=16)
+def _fast_samples(day_key, days):
+    """Polohy rychlých planet po čtvrtdnech v období předpovědi."""
+    jds = np.arange(day_key + 0.5, day_key + 0.5 + days + STEP, STEP)
+    out = {}
+    for _, code in FORECAST_FAST:
+        out[code] = np.array([swe.calc_ut(float(j), code)[0][0] for j in jds])
+    return jds, out
+
+
+@lru_cache(maxsize=16)
+def _global_events(day_key, days):
+    """Vstupy do znamení, obraty, novoluní, úplňky a zatmění (bez domů a místního času)."""
+    jd_start = day_key + 0.5
+    jd_end = jd_start + days
+    raw = []  # (jd, typ, extra, lon pro dům)
+
+    for p_name, p_code in [(n, c) for n, c in FORECAST_ALL if n not in ("Měsíc", "Severní Uzel")]:
+        jd = jd_start
+        prev_lon, prev_spd = _pos(jd, p_code)
+        while jd < jd_end:
+            jd2 = jd + STEP
+            lon2, spd2 = _pos(jd2, p_code)
+            if int(prev_lon // 30) != int(lon2 // 30):
+                lo, hi = jd, jd2
+                for _ in range(30):
+                    mid = (lo + hi) / 2
+                    if int(_pos(mid, p_code)[0] // 30) == int(prev_lon // 30):
+                        lo = mid
+                    else:
+                        hi = mid
+                raw.append((hi, "vstup", {"planeta": p_name, "znameni": ZODIAC_SIGNS_CZ[int(lon2 // 30)], "retrogradni": spd2 < 0}, lon2))
+            if (prev_spd < 0) != (spd2 < 0) and p_name != "Slunce":
+                lo, hi = jd, jd2
+                for _ in range(30):
+                    mid = (lo + hi) / 2
+                    if (_pos(mid, p_code)[1] < 0) == (prev_spd < 0):
+                        lo = mid
+                    else:
+                        hi = mid
+                raw.append((hi, "obrat", {"planeta": p_name, "smer": "retrográdní" if spd2 < 0 else "přímý",
+                                          "znameni": get_sign_and_deg_str(lon2)[0]}, lon2))
+            jd, prev_lon, prev_spd = jd2, lon2, spd2
+
+    def elong(jd):
+        return (_pos(jd, swe.MOON)[0] - _pos(jd, swe.SUN)[0]) % 360
+    jd = jd_start
+    prev = elong(jd)
+    while jd < jd_end:
+        jd2 = jd + STEP
+        cur = elong(jd2)
+        for target, typ in ((0, "novoluní"), (180, "úplněk")):
+            a = (prev - target) % 360
+            b = (cur - target) % 360
+            if a > 300 and b < 60:
+                lo, hi = jd, jd2
+                for _ in range(40):
+                    mid = (lo + hi) / 2
+                    if (elong(mid) - target) % 360 > 180:
+                        lo = mid
+                    else:
+                        hi = mid
+                m_lon = _pos(hi, swe.MOON)[0]
+                raw.append((hi, typ, {"znameni": get_sign_and_deg_str(m_lon)[0]}, m_lon))
+        jd, prev = jd2, cur
+
+    try:
+        jd = jd_start
+        while True:
+            t = swe.sol_eclipse_when_glob(jd, swe.FLG_SWIEPH)[1][0]
+            if t > jd_end:
+                break
+            s_lon = _pos(t, swe.SUN)[0]
+            raw.append((t, "zatmění Slunce", {"znameni": get_sign_and_deg_str(s_lon)[0]}, s_lon))
+            jd = t + 10
+        jd = jd_start
+        while True:
+            t = swe.lun_eclipse_when(jd, swe.FLG_SWIEPH)[1][0]
+            if t > jd_end:
+                break
+            m_lon = _pos(t, swe.MOON)[0]
+            raw.append((t, "zatmění Měsíce", {"znameni": get_sign_and_deg_str(m_lon)[0]}, m_lon))
+            jd = t + 10
+    except Exception as e:
+        print(f"Zatmění se nepodařilo spočítat: {e}")
+    return tuple(raw)
+
+
+@lru_cache(maxsize=64)
+def _daily_positions(start, tz_name):
+    """Polohy planet v místní poledne pro start−7 … start+7."""
+    tz = pytz.timezone(tz_name)
+    daily = []
+    base = datetime.strptime(start, "%Y-%m-%d")
+    for off in range(-7, 8):
+        dstr = (base + timedelta(days=off)).strftime("%Y-%m-%d")
+        jd = _jd_from_local(dstr, "12:00", tz)
+        postaveni = {}
+        for p_name, p_code in FORECAST_ALL:
+            p_lon, p_spd = _pos(jd, p_code)
+            znameni, stupne = get_sign_and_deg_str(p_lon)
+            postaveni[p_name] = {"znameni": znameni, "stupne": stupne, "retrográdní": "Ano" if p_spd < 0 else "Ne"}
+        daily.append({"datum": dstr, "postaveni": postaveni})
+    return json.dumps(daily, ensure_ascii=False)
+
+
+def _windows(mask):
+    """Souvislé úseky True v poli: seznam (začátek, konec) indexů včetně."""
+    out = []
+    idx = np.flatnonzero(mask)
+    if idx.size == 0:
+        return out
+    breaks = np.flatnonzero(np.diff(idx) > 1)
+    starts = np.concatenate(([idx[0]], idx[breaks + 1]))
+    ends = np.concatenate((idx[breaks], [idx[-1]]))
+    return list(zip(starts.tolist(), ends.tolist()))
+
+
 @app.get("/forecast")
 def forecast(date: str, time: str, lat: float, lon: float, start: str = "", days: int = 60, time_known: bool = True):
     """
@@ -350,42 +499,32 @@ def forecast(date: str, time: str, lat: float, lon: float, start: str = "", days
 
     today_local = datetime.now(tz).strftime("%Y-%m-%d")
     start = start or today_local
-    jd_start = _jd_from_local(start, "12:00", tz)
+    day_key = int(_jd_from_local(start, "12:00", tz) - 0.5)
+    jd_start = day_key + 0.5
     jd_end = jd_start + days
 
     def house_of(lon_):
         return find_house_idx(lon_, cusps) if time_known else None
 
+    def fmt(jd):
+        return _date_of_jd(jd, tz).strftime("%Y-%m-%d")
+
     # ---------- 1) témata období (pomalé planety, okno ±2 roky) ----------
     themes = []
-    scan_from, scan_to = jd_start - 730, jd_start + 730
+    s_jds, s_lons = _slow_samples(day_key)
+    today_idx = SCAN_DAYS
     for p_name, p_code, orb in FORECAST_SLOW:
-        samples = []
-        jd = scan_from
-        while jd <= scan_to:
-            samples.append((jd, _pos(jd, p_code)[0]))
-            jd += 1.0
+        lons = s_lons[p_code]
         for t_name in targets:
             n_lon = natal_lon[t_name]
             for a_name, angle in FORECAST_ASPECTS:
+                so = _signed_orb_np(lons, n_lon, angle)
                 windows = []
-                cur = None
-                for jd, t_lon in samples:
-                    so = _signed_orb(t_lon, n_lon, angle)
-                    if abs(so) <= orb:
-                        if cur is None:
-                            cur = {"start": jd, "end": jd, "min": abs(so), "exact": [], "prev": so}
-                        else:
-                            if cur["prev"] * so < 0 or so == 0:
-                                cur["exact"].append(jd)
-                            cur["end"] = jd
-                            cur["min"] = min(cur["min"], abs(so))
-                            cur["prev"] = so
-                    elif cur is not None:
-                        windows.append(cur)
-                        cur = None
-                if cur is not None:
-                    windows.append(cur)
+                for i0, i1 in _windows(np.abs(so) <= orb):
+                    seg = so[i0:i1 + 1]
+                    flips = np.flatnonzero((seg[:-1] * seg[1:] < 0) | (seg[1:] == 0)) + 1
+                    windows.append({"start": float(s_jds[i0]), "end": float(s_jds[i1]), "min": float(np.abs(seg).min()),
+                                    "exact": [float(s_jds[i0 + k]) for k in flips.tolist()]})
                 # průchody přes retrogradaci (mezera < 120 dní) slučujeme do jednoho tématu
                 merged = []
                 for w in windows:
@@ -412,135 +551,50 @@ def forecast(date: str, time: str, lat: float, lon: float, start: str = "", days
                         "planeta": p_name,
                         "natalni": t_name,
                         "aspekt": a_name,
-                        "od": _date_of_jd(w["start"], tz).strftime("%Y-%m-%d"),
-                        "do": _date_of_jd(w["end"], tz).strftime("%Y-%m-%d"),
-                        "presne": [_date_of_jd(x, tz).strftime("%Y-%m-%d") for x in w["exact"]],
+                        "od": fmt(w["start"]),
+                        "do": fmt(w["end"]),
+                        "presne": [fmt(x) for x in w["exact"]],
                         "faze": phase,
-                        "dum_tranzitu": house_of(samples[min(len(samples) - 1, int(jd_start - scan_from))][1]),
+                        "dum_tranzitu": house_of(float(lons[today_idx])),
                         "dum_natalni": house_of(n_lon) if t_name not in ("Ascendent", "MC") else None,
                     })
     themes.sort(key=lambda t: (t["od"]))
 
     # ---------- 2) události v období ----------
     events = []
-
-    def add_event(jd, typ, **extra):
-        events.append({"datum": _date_of_jd(jd, tz).strftime("%Y-%m-%d"), "cas": _date_of_jd(jd, tz).strftime("%H:%M"), "typ": typ, **extra})
-
-    # vstupy do znamení a obraty (retrográdní / přímé)
-    for p_name, p_code in [(n, c) for n, c in FORECAST_ALL if n not in ("Měsíc", "Severní Uzel")]:
-        jd = jd_start
-        prev_lon, prev_spd = _pos(jd, p_code)
-        step = 0.25
-        while jd < jd_end:
-            jd2 = jd + step
-            lon2, spd2 = _pos(jd2, p_code)
-            if int(prev_lon // 30) != int(lon2 // 30):
-                lo, hi = jd, jd2
-                for _ in range(30):
-                    mid = (lo + hi) / 2
-                    if int(_pos(mid, p_code)[0] // 30) == int(prev_lon // 30):
-                        lo = mid
-                    else:
-                        hi = mid
-                sign_idx = int(lon2 // 30)
-                add_event(hi, "vstup", planeta=p_name, znameni=ZODIAC_SIGNS_CZ[sign_idx],
-                          retrogradni=spd2 < 0, dum=house_of(lon2))
-            if (prev_spd < 0) != (spd2 < 0) and p_name != "Slunce":
-                lo, hi = jd, jd2
-                for _ in range(30):
-                    mid = (lo + hi) / 2
-                    if (_pos(mid, p_code)[1] < 0) == (prev_spd < 0):
-                        lo = mid
-                    else:
-                        hi = mid
-                add_event(hi, "obrat", planeta=p_name, smer="retrográdní" if spd2 < 0 else "přímý",
-                          znameni=get_sign_and_deg_str(lon2)[0], dum=house_of(lon2))
-            jd, prev_lon, prev_spd = jd2, lon2, spd2
-
-    # novoluní a úplňky
-    def elong(jd):
-        return (_pos(jd, swe.MOON)[0] - _pos(jd, swe.SUN)[0]) % 360
-    jd = jd_start
-    prev = elong(jd)
-    while jd < jd_end:
-        jd2 = jd + 0.25
-        cur = elong(jd2)
-        for target, typ in ((0, "novoluní"), (180, "úplněk")):
-            a = (prev - target) % 360
-            b = (cur - target) % 360
-            if a > 300 and b < 60:  # průchod přes cíl
-                lo, hi = jd, jd2
-                for _ in range(40):
-                    mid = (lo + hi) / 2
-                    if (elong(mid) - target) % 360 > 180:
-                        lo = mid
-                    else:
-                        hi = mid
-                m_lon = _pos(hi, swe.MOON)[0]
-                add_event(hi, typ, znameni=get_sign_and_deg_str(m_lon)[0], dum=house_of(m_lon))
-        jd, prev = jd2, cur
-
-    # zatmění Slunce a Měsíce
-    try:
-        jd = jd_start
-        while True:
-            res = swe.sol_eclipse_when_glob(jd, swe.FLG_SWIEPH)
-            t = res[1][0]
-            if t > jd_end:
-                break
-            add_event(t, "zatmění Slunce", znameni=get_sign_and_deg_str(_pos(t, swe.SUN)[0])[0], dum=house_of(_pos(t, swe.SUN)[0]))
-            jd = t + 10
-        jd = jd_start
-        while True:
-            res = swe.lun_eclipse_when(jd, swe.FLG_SWIEPH)
-            t = res[1][0]
-            if t > jd_end:
-                break
-            add_event(t, "zatmění Měsíce", znameni=get_sign_and_deg_str(_pos(t, swe.MOON)[0])[0], dum=house_of(_pos(t, swe.MOON)[0]))
-            jd = t + 10
-    except Exception as e:
-        print(f"Zatmění se nepodařilo spočítat: {e}")
+    for jd, typ, extra, e_lon in _global_events(day_key, days):
+        d = _date_of_jd(jd, tz)
+        events.append({"datum": d.strftime("%Y-%m-%d"), "cas": d.strftime("%H:%M"), "typ": typ, **extra, "dum": house_of(e_lon)})
 
     # přesné aspekty rychlých planet ke Slunci, Měsíci, ASC a MC
+    f_jds, f_lons = _fast_samples(day_key, days)
     key_targets = [t for t in ("Slunce", "Měsíc", "Ascendent", "MC") if t in targets]
     for p_name, p_code in FORECAST_FAST:
+        lons = f_lons[p_code]
         for t_name in key_targets:
             n_lon = natal_lon[t_name]
             for a_name, angle in FORECAST_ASPECTS:
                 if a_name == "Sextil":
                     continue
-                jd = jd_start
-                prev = _signed_orb(_pos(jd, p_code)[0], n_lon, angle)
-                while jd < jd_end:
-                    jd2 = jd + 0.25
-                    cur = _signed_orb(_pos(jd2, p_code)[0], n_lon, angle)
-                    if prev * cur < 0 and abs(prev) < 5 and abs(cur) < 5:
-                        lo, hi, plo = jd, jd2, prev
-                        for _ in range(30):
-                            mid = (lo + hi) / 2
-                            v = _signed_orb(_pos(mid, p_code)[0], n_lon, angle)
-                            if v * plo > 0:
-                                lo, plo = mid, v
-                            else:
-                                hi = mid
-                        add_event(hi, "aspekt", planeta=p_name, natalni=t_name, aspekt=a_name)
-                    jd, prev = jd2, cur
+                so = _signed_orb_np(lons, n_lon, angle)
+                hits = np.flatnonzero((so[:-1] * so[1:] < 0) & (np.abs(so[:-1]) < 5) & (np.abs(so[1:]) < 5))
+                for i in hits.tolist():
+                    lo, hi, plo = float(f_jds[i]), float(f_jds[i + 1]), float(so[i])
+                    for _ in range(30):
+                        mid = (lo + hi) / 2
+                        v = _signed_orb(_pos(mid, p_code)[0], n_lon, angle)
+                        if v * plo > 0:
+                            lo, plo = mid, v
+                        else:
+                            hi = mid
+                    d = _date_of_jd(hi, tz)
+                    events.append({"datum": d.strftime("%Y-%m-%d"), "cas": d.strftime("%H:%M"), "typ": "aspekt",
+                                   "planeta": p_name, "natalni": t_name, "aspekt": a_name})
 
     events.sort(key=lambda e: (e["datum"], e["cas"]))
 
     # ---------- 3) polohy po dnech pro pás dní (start−7 … start+7) ----------
-    daily = []
-    base = datetime.strptime(start, "%Y-%m-%d")
-    for off in range(-7, 8):
-        dstr = (base + timedelta(days=off)).strftime("%Y-%m-%d")
-        jd = _jd_from_local(dstr, "12:00", tz)
-        postaveni = {}
-        for p_name, p_code in FORECAST_ALL:
-            p_lon, p_spd = _pos(jd, p_code)
-            znameni, stupne = get_sign_and_deg_str(p_lon)
-            postaveni[p_name] = {"znameni": znameni, "stupne": stupne, "retrográdní": "Ano" if p_spd < 0 else "Ne"}
-        daily.append({"datum": dstr, "postaveni": postaveni})
+    daily = json.loads(_daily_positions(start, tz_name))
 
     vysledek = {"od": start, "dni": days, "temata": themes, "udalosti": events, "dny": daily}
     return Response(
