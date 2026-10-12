@@ -602,3 +602,35 @@ def forecast(date: str, time: str, lat: float, lon: float, start: str = "", days
         media_type="application/json; charset=utf-8",
         headers={"Cache-Control": "public, max-age=3600"},
     )
+
+
+# =====================================================================
+#  ASTRO MAPA (astrokartografie): rovníkové souřadnice planet a hvězdný
+#  čas v okamžiku narození. Čáry ASC/DSC/MC/IC si z nich spočítá aplikace.
+# =====================================================================
+ASTROMAP_BODIES = [("Slunce", swe.SUN), ("Měsíc", swe.MOON), ("Merkur", swe.MERCURY), ("Venuše", swe.VENUS),
+                   ("Mars", swe.MARS), ("Jupiter", swe.JUPITER), ("Saturn", swe.SATURN), ("Uran", swe.URANUS),
+                   ("Neptun", swe.NEPTUNE), ("Pluto", swe.PLUTO)]
+
+
+@app.get("/astromap")
+def astromap(date: str, time: str, lat: float, lon: float):
+    """
+    date/time/lat/lon = narození (místní čas v místě narození).
+    Vrací hvězdný čas v Greenwichi (stupně) a pro každou planetu rektascenzi
+    a deklinaci (zdánlivé, k pravému rovníku data) ve stupních.
+    """
+    tz_name = tf.timezone_at(lng=lon, lat=lat) or "UTC"
+    tz = pytz.timezone(tz_name)
+    jd = _jd_from_local(date, time, tz)
+    gst = (swe.sidtime(jd) * 15.0) % 360.0
+    planety = {}
+    for name, code in ASTROMAP_BODIES:
+        r = swe.calc_ut(jd, code, swe.FLG_SWIEPH | swe.FLG_EQUATORIAL)[0]
+        planety[name] = {"ra": round(r[0], 5), "dec": round(r[1], 5)}
+    vysledek = {"gst": round(gst, 5), "jd": jd, "planety": planety}
+    return Response(
+        content=json.dumps(vysledek, ensure_ascii=False),
+        media_type="application/json; charset=utf-8",
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
