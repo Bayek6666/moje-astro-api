@@ -1,5 +1,7 @@
-from fastapi import FastAPI, Response
+from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+import hmac
 from timezonefinder import TimezoneFinder
 from datetime import datetime
 import pytz
@@ -16,9 +18,8 @@ swe.set_ephe_path(CURRENT_DIR)
 # --- ROBUSTNÍ AUTOMATICKÉ STAŽENÍ ASTROLOGICKÝCH DAT ---
 FILES_TO_DOWNLOAD = ["seas_18.se1", "sepl_18.se1", "semo_18.se1"]
 
+# Ověřené HTTPS (kontrola certifikátu), aby nikdo nemohl podstrčit falešná data.
 ssl_context = ssl.create_default_context()
-ssl_context.check_hostname = False
-ssl_context.verify_mode = ssl.CERT_NONE
 
 for filename in FILES_TO_DOWNLOAD:
     dest_path = os.path.join(CURRENT_DIR, filename)
@@ -51,6 +52,20 @@ for filename in FILES_TO_DOWNLOAD:
 # --------------------------------------------------------------
 
 app = FastAPI()
+
+# --- OCHRANA API KLÍČEM ---
+# Když je na serveru nastavená proměnná ASTRO_API_KEY, každý výpočet musí poslat
+# hlavičku X-Api-Key se stejnou hodnotou. Bez nastavené proměnné API funguje jako dřív.
+API_KEY = os.environ.get("ASTRO_API_KEY", "").strip()
+PUBLIC_PATHS = {"/", "/health"}
+
+@app.middleware("http")
+async def require_api_key(request: Request, call_next):
+    if API_KEY and request.method != "OPTIONS" and request.url.path not in PUBLIC_PATHS:
+        sent = request.headers.get("x-api-key", "")
+        if not hmac.compare_digest(sent.encode(), API_KEY.encode()):
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+    return await call_next(request)
 
 app.add_middleware(
     CORSMiddleware,
@@ -170,6 +185,10 @@ def read_root():
         media_type="application/json; charset=utf-8",
         headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"}
     )
+
+@app.get("/health")
+def health():
+    return Response(content='{"ok":true}', media_type="application/json", headers={"Cache-Control": "no-store"})
 
 @app.get("/calculate")
 def calculate_chart(date: str, time: str, lat: float, lon: float):
